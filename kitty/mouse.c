@@ -439,6 +439,17 @@ url_is_clickable_with(Screen *screen, int modifiers) {
 }
 
 static void
+dispatch_mouse_move_watchers(Window *w, Screen *screen, int modifiers) {
+    if (!screen->has_mouse_move_watcher || screen->callbacks == Py_None) return;
+    monotonic_t now = monotonic();
+    if (now - screen->last_mouse_move_watcher_dispatch_at < ms_to_monotonic_t(50ll)) return;
+    screen->last_mouse_move_watcher_dispatch_at = now;
+    PyObject *ret = PyObject_CallMethod(screen->callbacks, "dispatch_mouse_move_watchers", "III", w->mouse_pos.cell_x, w->mouse_pos.cell_y, modifiers);
+    if (ret == NULL) PyErr_Print();
+    else Py_DECREF(ret);
+}
+
+static void
 detect_url(Screen *screen, unsigned int x, unsigned int y, int modifiers) {
     const bool clickable = url_is_clickable_with(screen, modifiers);
     int hid = screen_detect_url(screen, x, y, clickable);
@@ -738,6 +749,7 @@ HANDLER(handle_move_event) {
     }
     Screen *screen = w->render_data.screen;
     if (OPT(detect_urls)) detect_url(screen, w->mouse_pos.cell_x, w->mouse_pos.cell_y, modifiers);
+    dispatch_mouse_move_watchers(w, screen, modifiers);
     if (should_handle_in_kitty(w, screen, button)) {
         handle_mouse_movement_in_kitty(w, button, mouse_cell_changed | cell_half_changed);
     } else {
@@ -2064,6 +2076,7 @@ send_mock_mouse_event_to_window(PyObject *self UNUSED, PyObject *args) {
         else if (button == -3) do_drag_scroll(w, false);
         else {
             if (OPT(detect_urls)) detect_url(w->render_data.screen, x, y, modifiers);
+            dispatch_mouse_move_watchers(w, w->render_data.screen, modifiers);
             handle_mouse_movement_in_kitty(w, last_button_pressed, mouse_cell_changed);
             handle_potential_drag(w, last_button_pressed);
         }
