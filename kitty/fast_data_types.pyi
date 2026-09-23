@@ -1200,6 +1200,12 @@ class Screen:
     def set_marker(self, marker: Optional[MarkerFunc] = None) -> None:
         pass
 
+    def set_has_mouse_move_watcher(self, val: bool) -> None:
+        pass
+
+    def set_hyperlink_for_range(self, y: int, start: int, end: int, url: Optional[str] = None, id: Optional[str] = None) -> None:
+        pass
+
     def paste_bytes(self, data: bytes) -> None:
         pass
     paste = paste_bytes
