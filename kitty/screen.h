@@ -197,6 +197,8 @@ typedef struct {
         index_type x, y;
         bool has_detected_url;
     } current_hyperlink_under_mouse;
+    bool has_mouse_move_watcher; // avoids a Python call on every mouse move when unused
+    monotonic_t last_mouse_move_watcher_dispatch_at;
     struct {
         uint8_t stack[16], count;
     } main_pointer_shape_stack, alternate_pointer_shape_stack;
