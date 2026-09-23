@@ -47,7 +47,10 @@ from .fast_data_types import (
     ESC_DCS,
     ESC_OSC,
     GLFW_DRAG_OPERATION_COPY,
+    GLFW_MOD_ALT,
     GLFW_MOD_CONTROL,
+    GLFW_MOD_SHIFT,
+    GLFW_MOD_SUPER,
     GLFW_PRESS,
     GLFW_RELEASE,
     GLFW_REPEAT,
@@ -363,6 +366,7 @@ class Watchers:
     on_color_scheme_preference_change: list[Watcher]
     on_tab_bar_dirty: list[Watcher]
     on_quit: list[Watcher]
+    on_mouse_move: list[Watcher]
 
     def __init__(self) -> None:
         self.on_resize = []
@@ -375,6 +379,7 @@ class Watchers:
         self.on_color_scheme_preference_change = []
         self.on_tab_bar_dirty = []
         self.on_quit = []
+        self.on_mouse_move = []
 
     def add(self, others: 'Watchers') -> None:
         def merge(base: list[Watcher], other: list[Watcher]) -> None:
@@ -392,6 +397,7 @@ class Watchers:
         merge(self.on_color_scheme_preference_change, others.on_color_scheme_preference_change)
         merge(self.on_tab_bar_dirty, others.on_tab_bar_dirty)
         merge(self.on_quit, others.on_quit)
+        merge(self.on_mouse_move, others.on_mouse_move)
 
     def clear(self) -> None:
         del self.on_close[:], self.on_resize[:], self.on_focus_change[:]
@@ -400,6 +406,7 @@ class Watchers:
         del self.on_color_scheme_preference_change[:]
         del self.on_tab_bar_dirty[:]
         del self.on_quit[:]
+        del self.on_mouse_move[:]
 
     def copy(self) -> 'Watchers':
         ans = Watchers()
@@ -413,6 +420,7 @@ class Watchers:
         ans.on_color_scheme_preference_change = self.on_color_scheme_preference_change[:]
         ans.on_tab_bar_dirty = self.on_tab_bar_dirty[:]
         ans.on_quit = self.on_quit[:]
+        ans.on_mouse_move = self.on_mouse_move[:]
         return ans
 
     @property
@@ -428,6 +436,7 @@ class Watchers:
             or self.on_program_status_change
             or self.on_tab_bar_dirty
             or self.on_quit
+            or self.on_mouse_move
         )
 
 
@@ -845,6 +854,7 @@ class Window:
         self.screen: Screen = Screen(self, 24, 80, opts.scrollback_lines, cell_width, cell_height, self.id)
         self.screen.track_activity = bool(opts.tab_activity_symbol)
         self.session_color_schemes = SessionColorSchemes()
+        self.screen.set_has_mouse_move_watcher(bool(self.watchers.on_mouse_move))
         if copy_colors_from is not None:
             self.screen.copy_colors_from(copy_colors_from.screen)
             self.session_color_schemes.copy_from(copy_colors_from.session_color_schemes)
@@ -1473,6 +1483,19 @@ class Window:
         for _step in range(steps):
             handled = get_boss().combine(action, window_for_dispatch=self, dispatch_type='MouseEvent') or handled
         return handled
+
+    def dispatch_mouse_move_watchers(self, x: int, y: int, mods: int) -> None:
+        if not self.watchers.on_mouse_move:
+            return
+        data = {
+            'x': x,
+            'y': y,
+            'ctrl': bool(mods & GLFW_MOD_CONTROL),
+            'shift': bool(mods & GLFW_MOD_SHIFT),
+            'alt': bool(mods & GLFW_MOD_ALT),
+            'super': bool(mods & GLFW_MOD_SUPER),
+        }
+        call_watchers(weakref.ref(self), 'on_mouse_move', data)
 
     def drag_thumbnails(self, label: str) -> tuple[tuple[bytes, int, int], ...]:
         # Render label as a single line of text, clipped to the width of this window
