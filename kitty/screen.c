@@ -10306,6 +10306,12 @@ set_marker(Screen *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *
+set_has_mouse_move_watcher(Screen *self, PyObject *val) {
+    self->has_mouse_move_watcher = PyObject_IsTrue(val) ? true : false;
+    Py_RETURN_NONE;
+}
+
 
 static PyObject *
 scroll_to_next_mark(Screen *self, PyObject *args) {
@@ -10472,6 +10478,30 @@ hyperlink_at(Screen *self, PyObject *args) {
     if (!hid) Py_RETURN_NONE;
     const char *url = get_hyperlink_for_id(self->hyperlink_pool, hid, true);
     return Py_BuildValue("s", url);
+}
+
+static PyObject *
+set_hyperlink_for_range(Screen *self, PyObject *args) {
+    unsigned int y, start, end;
+    const char *url = NULL, *id = NULL;
+    if (!PyArg_ParseTuple(args, "III|zz", &y, &start, &end, &url, &id)) return NULL;
+    if (y >= self->lines) {
+        PyErr_SetString(PyExc_ValueError, "y out of bounds");
+        return NULL;
+    }
+    if (start >= self->columns || end >= self->columns || start > end) {
+        PyErr_SetString(PyExc_ValueError, "start/end out of bounds");
+        return NULL;
+    }
+    Line *line = screen_visual_line(self, y);
+    if (!line) Py_RETURN_NONE;
+    hyperlink_id_type hid = 0;
+    if (url && url[0]) hid = get_id_for_hyperlink(self, id, url);
+    for (index_type x = start; x <= end; x++) line->cpu_cells[x].hyperlink_id = hid;
+    if (self->scrolled_by && y < self->scrolled_by) historybuf_mark_line_dirty(self->historybuf, self->scrolled_by - 1 - y);
+    else linebuf_mark_line_dirty(self->linebuf, self->scrolled_by ? y - self->scrolled_by : y);
+    self->is_dirty = true;
+    Py_RETURN_NONE;
 }
 
 static PyObject *
@@ -11158,8 +11188,9 @@ static PyMethodDef methods[] = {
                                                     MND(update_graphics_layers, METH_NOARGS) MND(rendered_scroll_state, METH_NOARGS)
                                                         MND(scrollbar_geometry, METH_NOARGS) MND(has_scrollbar, METH_O) MND(is_selection_dirty, METH_NOARGS){
                                                             "select_graphic_rendition", (PyCFunction)_select_graphic_rendition, METH_VARARGS, ""},
+    MND(set_hyperlink_for_range, METH_VARARGS) MND(set_has_mouse_move_watcher, METH_O)
 
-    {NULL} /* Sentinel */
+        {NULL} /* Sentinel */
 };
 
 static PyGetSetDef getsetters[] = {
