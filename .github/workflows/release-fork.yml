@@ -41,7 +41,8 @@ jobs:
             TAG="build-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD)"
           fi
           ARCHIVE="kitty-fork-linux-x86_64-${TAG}.tar.xz"
-          tar -cJf "$ARCHIVE" --exclude=.git --exclude="*.o" --exclude="*.d" .
+          tar -cJf "/tmp/$ARCHIVE" --exclude=.git --exclude="*.o" --exclude="*.d" .
+          mv "/tmp/$ARCHIVE" "$ARCHIVE"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
 
