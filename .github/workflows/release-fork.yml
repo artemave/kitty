@@ -31,20 +31,6 @@ jobs:
       - name: Build kitty
         run: ./dev.sh build
 
-      - name: Make launcher binaries relocatable
-        run: |
-          set -e
-          # ./dev.sh build bakes the CI runner's own absolute build path in as
-          # PYTHONHOME, so the binaries only work if run from that exact path.
-          # Wrap them in a script that computes PYTHONHOME relative to the
-          # binary's own location instead, so the archive works wherever it's
-          # extracted.
-          for bin in kitty kitten; do
-            mv "kitty/launcher/$bin" "kitty/launcher/$bin.bin"
-            printf '#!/bin/sh\nSELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexport PYTHONHOME="$SELF_DIR/../../dependencies/linux-amd64"\nexec "$SELF_DIR/%s.bin" "$@"\n' "$bin" > "kitty/launcher/$bin"
-            chmod +x "kitty/launcher/$bin"
-          done
-
       - name: Package
         id: package
         run: |
