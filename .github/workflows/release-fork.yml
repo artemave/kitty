@@ -1,0 +1,81 @@
+name: Build fork release
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  linux-build:
+    name: Linux build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build kitty
+        # Reuses this repo's own CI build driver (installs system deps,
+        # fonts, etc., then runs plain `setup.py build`, bundle_type=source)
+        # rather than `./dev.sh build` (bundle_type=develop), which bakes the
+        # CI runner's own absolute checkout path into the launcher binary as
+        # its Python home. That only ever works from that exact path and
+        # breaks with "No module named 'encodings'" everywhere else,
+        # including after extracting this archive on another machine.
+        # bundle_type=source computes that path relative to the launcher's
+        # own location instead, and uses the system Python rather than
+        # vendoring one, which also avoids shipping a ~450MB vendored
+        # interpreter in the archive.
+        run: python .github/workflows/ci.py build
+
+      - name: Determine release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Tags look like "<kitty version>-custom-hyperlinks-fork.<n>", e.g.
+        # "0.49.2-custom-hyperlinks-fork.1". <n> rolls forward per kitty
+        # version, so re-running this (e.g. after a hot-fix) on the same
+        # upstream version gets .2, .3, etc., while a rebase onto a new
+        # upstream version resets it back to .1.
+        run: |
+          set -e
+          KITTY_VERSION=$(python3 -c "from kitty.constants import str_version; print(str_version)")
+          PREFIX="${KITTY_VERSION}-custom-hyperlinks-fork."
+          LAST=$(gh release list --repo "${{ github.repository }}" --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -F "$PREFIX" | sed "s/^${PREFIX}//" | sort -n | tail -1)
+          echo "tag=${PREFIX}$(( ${LAST:-0} + 1 ))" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        id: package
+        run: |
+          set -e
+          TAG="${{ steps.tag.outputs.tag }}"
+          ARCHIVE="kitty-fork-linux-x86_64-${TAG}.tar.xz"
+          tar -cJf "/tmp/$ARCHIVE" --exclude=.git --exclude="*.o" --exclude="*.d" .
+          mv "/tmp/$ARCHIVE" "$ARCHIVE"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            "${{ steps.package.outputs.archive }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --notes "Automated build from commit ${{ github.sha }}." \
+            --prerelease
