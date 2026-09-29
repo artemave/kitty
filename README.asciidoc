@@ -1,5 +1,23 @@
 = kitty - the fast, feature-rich, cross-platform, GPU based terminal
 
+== This fork
+
+This fork adds an `on_mouse_move` watcher hook and a
+`Screen.set_hyperlink_for_range()` primitive, so a `--watcher` script can turn
+arbitrary screen text into real hyperlinks on hover (e.g. file references,
+custom link schemes). See link:docs/launch.rst[] for the hook and API
+documentation.
+
+Linux release builds are published at
+https://github.com/artemave/kitty/releases. Install (or update) with:
+
+[source,sh]
+----
+curl -fsSL https://raw.githubusercontent.com/artemave/kitty/master/install-fork.sh | bash
+----
+
+This symlinks `kitty` and `kitten` into `~/.local/bin`.
+
 If you live in the terminal, *kitty* is made for **you**!
 
 See https://sw.kovidgoyal.net/kitty/[the kitty website].
