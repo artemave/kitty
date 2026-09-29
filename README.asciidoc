@@ -1,16 +1,19 @@
 = kitty - the fast, feature-rich, cross-platform, GPU based terminal
 
-If you live in the terminal, *kitty* is made for **you**!
+== This fork
 
-See https://sw.kovidgoyal.net/kitty/[the kitty website].
+This fork adds an `on_mouse_move` watcher hook and a
+`Screen.set_hyperlink_for_range()` primitive, so a `--watcher` script can turn
+arbitrary screen text into real hyperlinks on hover (e.g. file references,
+custom link schemes). See link:docs/launch.rst[] for the hook and API
+documentation.
 
-image:https://github.com/kovidgoyal/kitty/workflows/CI/badge.svg["Build status", link="https://github.com/kovidgoyal/kitty/actions?query=workflow%3ACI"]
+Linux release builds are published at
+https://github.com/artemave/kitty/releases. Install (or update) with:
 
-https://sw.kovidgoyal.net/kitty/faq/[Frequently Asked Questions]
+[source,sh]
+----
+curl -fsSL https://raw.githubusercontent.com/artemave/kitty/master/install-fork.sh | bash
+----
 
-To ask other questions about kitty usage, use either the https://github.com/kovidgoyal/kitty/discussions/[discussions on GitHub] or the
-https://www.reddit.com/r/KittyTerminal[Reddit community]
-
-Packaging status in various repositories:
-
-image:https://repology.org/badge/vertical-allrepos/kitty-terminal.svg?columns=3&header=kitty["Packaging status", link="https://repology.org/project/kitty-terminal/versions"]
+This symlinks `kitty` and `kitten` into `~/.local/bin`.
