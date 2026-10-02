@@ -1,0 +1,235 @@
+name: Sync fork with upstream kitty
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+jobs:
+  sync:
+    name: Rebase onto upstream and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          # Without this, checkout wires GITHUB_TOKEN into git's http
+          # credential config for github.com broadly, which overrides the
+          # FORK_SYNC_PAT we embed in the push URL later - pushes end up
+          # authenticating as the Actions bot regardless, which (same as
+          # GITHUB_TOKEN used directly) can never touch .github/workflows/.
+          persist-credentials: false
+
+      - name: Set up Python
+        # Without this, pip falls back to a --user install on the runner's
+        # externally-managed system Python, and ty's module search path
+        # never includes that location - every docs/ type ever resolves
+        # as "unresolved-import" (same version release-fork.yml builds with).
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up Node (for the Claude Code CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git identity
+        # GIT_EDITOR=true suppresses the commit-message editor that
+        # `rebase --continue` would otherwise try to open after a conflict
+        # is resolved (there's no terminal to edit in here).
+        run: |
+          git config user.name "kitty-fork-sync[bot]"
+          git config user.email "kitty-fork-sync@users.noreply.github.com"
+          echo "GIT_EDITOR=true" >> "$GITHUB_ENV"
+          echo "EDITOR=true" >> "$GITHUB_ENV"
+
+      - name: Fetch upstream
+        id: base
+        run: |
+          set -e
+          git remote add upstream https://github.com/kovidgoyal/kitty.git
+          git fetch upstream master
+          OLD_BASE=$(git merge-base master upstream/master)
+          NEW_BASE=$(git rev-parse upstream/master)
+          echo "old_base=$OLD_BASE" >> "$GITHUB_OUTPUT"
+          echo "new_base=$NEW_BASE" >> "$GITHUB_OUTPUT"
+          # Distinct from old_base: this is master's own current tip (base
+          # plus the fork's commits), i.e. what origin/master must still be
+          # for the later --force-with-lease push to be safe.
+          echo "master_before=$(git rev-parse master)" >> "$GITHUB_OUTPUT"
+          if [ "$OLD_BASE" = "$NEW_BASE" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          fi
+          # The files our own commits touch, captured before the rebase
+          # moves anything - this is what post-rebase verification checks,
+          # not upstream's own (already-CI-passing) changes.
+          git diff --name-only "$OLD_BASE" master > /tmp/our_files.txt
+
+      - name: Rebase onto upstream, resolving conflicts with Claude
+        id: rebase
+        if: steps.base.outputs.up_to_date == 'false'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          llm_touched=false
+          resolution_failed=false
+
+          if ! git rebase --onto upstream/master "${{ steps.base.outputs.old_base }}" master; then
+            while [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; do
+              conflicts=$(git diff --name-only --diff-filter=U)
+              if [ -z "$conflicts" ]; then
+                git rebase --continue && continue
+                break
+              fi
+
+              subject=$(git log -1 --format=%s REBASE_HEAD)
+              body=$(git log -1 --format=%b REBASE_HEAD)
+
+              for f in $conflicts; do
+                echo "Resolving conflict in $f with Claude..."
+                prompt=$(printf '%s\n' \
+                  "Resolve the git conflict markers in '$f'." \
+                  "This file belongs to a personal fork of the kitty terminal; the conflict arose while rebasing the fork's own commit on top of a newer upstream kitty." \
+                  "The commit being replayed:" \
+                  "" \
+                  "Subject: $subject" \
+                  "" \
+                  "Body:" \
+                  "$body" \
+                  "" \
+                  "Edit '$f' in place so it contains both upstream's changes and the intent of the commit above, with no remaining conflict markers (<<<<<<<, =======, >>>>>>>)." \
+                  "Do not run git commands. Do not touch any other file.")
+                claude -p "$prompt" --allowedTools "Read,Edit" --permission-mode acceptEdits
+
+                if grep -qE '^(<{7}|={7}|>{7})' "$f"; then
+                  echo "Claude did not resolve conflicts in $f"
+                  resolution_failed=true
+                  failed_file="$f"
+                  break 2
+                fi
+                git add "$f"
+                llm_touched=true
+              done
+
+              if [ "$resolution_failed" = true ]; then
+                break
+              fi
+              git rebase --continue
+            done
+          fi
+
+          if [ "$resolution_failed" = true ]; then
+            git rebase --abort
+            echo "resolution_failed=true" >> "$GITHUB_OUTPUT"
+            echo "failed_file=$failed_file" >> "$GITHUB_OUTPUT"
+          else
+            echo "resolution_failed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "llm_touched=$llm_touched" >> "$GITHUB_OUTPUT"
+
+      - name: Open an issue when Claude can't resolve a conflict
+        if: steps.rebase.outputs.resolution_failed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          body=$(printf '%s\n' \
+            "Rebasing onto upstream kitty (\`${{ steps.base.outputs.new_base }}\`) hit a conflict in \`${{ steps.rebase.outputs.failed_file }}\` that Claude could not resolve. The rebase was aborted; \`master\` is unchanged. Rebase manually:" \
+            "" \
+            '```sh' \
+            "git fetch upstream master" \
+            "git rebase --onto upstream/master ${{ steps.base.outputs.old_base }} master" \
+            '```')
+          gh issue create --repo "${{ github.repository }}" \
+            --title "Upstream sync stuck: conflict in ${{ steps.rebase.outputs.failed_file }}" \
+            --body "$body"
+
+      - name: Verify
+        id: verify
+        if: steps.base.outputs.up_to_date == 'false' && steps.rebase.outputs.resolution_failed == 'false'
+        run: |
+          set -e
+          ok=true
+
+          py_files=$(grep '\.py$' /tmp/our_files.txt | xargs -r ls -d 2>/dev/null || true)
+          c_files=$(grep -E '\.(c|h)$' /tmp/our_files.txt | xargs -r ls -d 2>/dev/null || true)
+
+          # Same deps ci.yml's "Linux package" job installs before its own
+          # formatting/type-check steps - type-check in particular needs
+          # docs/requirements.txt (sphinx et al) to resolve docs/conf.py's
+          # imports, or it fails on files we never touched.
+          pip install -r docs/requirements.txt ruff ty types-requests types-docutils types-Pygments clang-format
+
+          if [ -n "$py_files" ]; then
+            ruff format --check $py_files || ok=false
+            ruff check $py_files || ok=false
+          fi
+          if [ -n "$c_files" ]; then
+            clang-format --dry-run --Werror $c_files || ok=false
+          fi
+
+          python .github/workflows/ci.py build || ok=false
+          ./test.py type-check || ok=false
+
+          echo "passed=$ok" >> "$GITHUB_OUTPUT"
+
+      - name: Push straight to master (clean rebase, no LLM involved)
+        if: steps.base.outputs.up_to_date == 'false' && steps.rebase.outputs.resolution_failed == 'false' && steps.rebase.outputs.llm_touched == 'false' && steps.verify.outputs.passed == 'true'
+        # The default GITHUB_TOKEN can never push a ref that touches
+        # .github/workflows/ - not a permissions: setting, a hard platform
+        # rule - and our own commits add files there. FORK_SYNC_PAT is a
+        # fine-grained PAT scoped to this repo (Contents + Workflows:
+        # read and write) that can.
+        #
+        # Bare --force-with-lease needs a remote-tracking ref to compare
+        # against, which it finds by matching the push URL against a
+        # configured remote - pushing to a literal authenticated URL (not
+        # the "origin" name) doesn't match, so it always sees it as stale.
+        # Naming the expected old value explicitly sidesteps that: it's
+        # master_before from the Fetch upstream step (master's tip before
+        # this job's own rebase moved the local branch - not old_base,
+        # which is the older point master and upstream diverged from).
+        env:
+          FORK_SYNC_PAT: ${{ secrets.FORK_SYNC_PAT }}
+        run: git push "https://x-access-token:${FORK_SYNC_PAT}@github.com/${{ github.repository }}.git" HEAD:master "--force-with-lease=master:${{ steps.base.outputs.master_before }}"
+
+      - name: Trigger a release build
+        if: steps.base.outputs.up_to_date == 'false' && steps.rebase.outputs.resolution_failed == 'false' && steps.rebase.outputs.llm_touched == 'false' && steps.verify.outputs.passed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-fork.yml --repo "${{ github.repository }}" --ref master
+
+      - name: Open a PR for review (Claude touched a conflict, or verification failed)
+        if: steps.base.outputs.up_to_date == 'false' && steps.rebase.outputs.resolution_failed == 'false' && (steps.rebase.outputs.llm_touched == 'true' || steps.verify.outputs.passed == 'false')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORK_SYNC_PAT: ${{ secrets.FORK_SYNC_PAT }}
+        run: |
+          set -e
+          branch="upstream-sync-$(date +%Y%m%d)-$(git rev-parse --short "${{ steps.base.outputs.new_base }}")"
+          git push "https://x-access-token:${FORK_SYNC_PAT}@github.com/${{ github.repository }}.git" "HEAD:$branch"
+          body=$(printf '%s\n' \
+            "Rebases the fork's commits onto upstream \`${{ steps.base.outputs.new_base }}\`." \
+            "" \
+            "- Claude resolved conflicts: ${{ steps.rebase.outputs.llm_touched }}" \
+            "- Local verification passed: ${{ steps.verify.outputs.passed }}" \
+            "" \
+            "Review before merging - this did not go straight to \`master\` because one of the above needed a human look.")
+          gh pr create --repo "${{ github.repository }}" \
+            --base master --head "$branch" \
+            --title "Sync with upstream kitty ($(git rev-parse --short "${{ steps.base.outputs.new_base }}"))" \
+            --body "$body"
