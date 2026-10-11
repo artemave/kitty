@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
   issues: write
   actions: write
 
@@ -213,23 +212,56 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run release-fork.yml --repo "${{ github.repository }}" --ref master
 
-      - name: Open a PR for review (Claude touched a conflict, or verification failed)
+      - name: Open an issue for review (Claude touched a conflict, or verification failed)
+        # Not a PR: the branch is master rebased, so it can only replace
+        # master (force-push), never merge into it. The range-diff of the
+        # fork's own commits is the part a human can actually review.
         if: steps.base.outputs.up_to_date == 'false' && steps.rebase.outputs.resolution_failed == 'false' && (steps.rebase.outputs.llm_touched == 'true' || steps.verify.outputs.passed == 'false')
         env:
           GH_TOKEN: ${{ github.token }}
           FORK_SYNC_PAT: ${{ secrets.FORK_SYNC_PAT }}
         run: |
           set -e
-          branch="upstream-sync-$(date +%Y%m%d)-$(git rev-parse --short "${{ steps.base.outputs.new_base }}")"
-          git push "https://x-access-token:${FORK_SYNC_PAT}@github.com/${{ github.repository }}.git" "HEAD:$branch"
-          body=$(printf '%s\n' \
-            "Rebases the fork's commits onto upstream \`${{ steps.base.outputs.new_base }}\`." \
-            "" \
-            "- Claude resolved conflicts: ${{ steps.rebase.outputs.llm_touched }}" \
-            "- Local verification passed: ${{ steps.verify.outputs.passed }}" \
-            "" \
-            "Review before merging - this did not go straight to \`master\` because one of the above needed a human look.")
-          gh pr create --repo "${{ github.repository }}" \
-            --base master --head "$branch" \
-            --title "Sync with upstream kitty ($(git rev-parse --short "${{ steps.base.outputs.new_base }}"))" \
-            --body "$body"
+          repo_url="https://x-access-token:${FORK_SYNC_PAT}@github.com/${{ github.repository }}.git"
+          old_base="${{ steps.base.outputs.old_base }}"
+          new_base="${{ steps.base.outputs.new_base }}"
+          master_before="${{ steps.base.outputs.master_before }}"
+          short_base=$(git rev-parse --short "$new_base")
+          branch="upstream-sync-$(date +%Y%m%d)-$short_base"
+          git push "$repo_url" "HEAD:$branch"
+
+          for stale in $(git ls-remote --heads "$repo_url" 'upstream-sync-*' | sed 's|.*refs/heads/||' | grep -vxF "$branch"); do
+            git push "$repo_url" --delete "$stale"
+          done
+
+          label=upstream-sync-review
+          gh label create "$label" --repo "${{ github.repository }}" --color FBCA04 --force
+          for n in $(gh issue list --repo "${{ github.repository }}" --label "$label" --state open --json number -q '.[].number'); do
+            gh issue close "$n" --repo "${{ github.repository }}" --comment "Superseded by a newer sync onto \`$short_base\`."
+          done
+
+          {
+            echo "Rebased the fork's commits onto upstream \`$new_base\` as branch \`$branch\`."
+            echo
+            echo "- Claude resolved conflicts: ${{ steps.rebase.outputs.llm_touched }}"
+            echo "- Local verification passed: ${{ steps.verify.outputs.passed }}"
+            echo
+            echo "How the fork's commits changed (\`git range-diff\`, old master vs. this branch):"
+            echo
+            echo '```'
+            git range-diff --no-color "$old_base..$master_before" "$new_base..HEAD"
+            echo '```'
+            echo
+            echo "To accept, replace \`master\` with the branch and build a release:"
+            echo
+            echo '```sh'
+            echo "git fetch origin"
+            echo "git push --force-with-lease=master:$master_before origin origin/$branch:master"
+            echo "gh workflow run release-fork.yml --ref master"
+            echo '```'
+          } > /tmp/issue_body.md
+
+          gh issue create --repo "${{ github.repository }}" \
+            --title "Upstream sync needs review ($short_base)" \
+            --label "$label" \
+            --body-file /tmp/issue_body.md
