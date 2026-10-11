@@ -228,7 +228,7 @@ jobs:
           master_before="${{ steps.base.outputs.master_before }}"
           short_base=$(git rev-parse --short "$new_base")
           branch="upstream-sync-$(date +%Y%m%d)-$short_base"
-          git push "$repo_url" "HEAD:$branch"
+          git push "$repo_url" "+HEAD:$branch"
 
           for stale in $(git ls-remote --heads "$repo_url" 'upstream-sync-*' | sed 's|.*refs/heads/||' | grep -vxF "$branch"); do
             git push "$repo_url" --delete "$stale"
