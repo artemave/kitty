@@ -72,6 +72,13 @@ jobs:
           else
             echo "up_to_date=false" >> "$GITHUB_OUTPUT"
           fi
+          # Upstream only touches this line in its release commits.
+          version_line='^version: Version'
+          if [ "$(git show "$OLD_BASE:kitty/constants.py" | grep "$version_line")" = "$(git show "$NEW_BASE:kitty/constants.py" | grep "$version_line")" ]; then
+            echo "new_kitty_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_kitty_release=true" >> "$GITHUB_OUTPUT"
+          fi
           # The files our own commits touch, captured before the rebase
           # moves anything - this is what post-rebase verification checks,
           # not upstream's own (already-CI-passing) changes.
@@ -206,8 +213,8 @@ jobs:
           FORK_SYNC_PAT: ${{ secrets.FORK_SYNC_PAT }}
         run: git push "https://x-access-token:${FORK_SYNC_PAT}@github.com/${{ github.repository }}.git" HEAD:master "--force-with-lease=master:${{ steps.base.outputs.master_before }}"
 
-      - name: Trigger a release build
-        if: steps.base.outputs.up_to_date == 'false' && steps.rebase.outputs.resolution_failed == 'false' && steps.rebase.outputs.llm_touched == 'false' && steps.verify.outputs.passed == 'true'
+      - name: Trigger a release build (upstream made a kitty release)
+        if: steps.base.outputs.up_to_date == 'false' && steps.base.outputs.new_kitty_release == 'true' && steps.rebase.outputs.resolution_failed == 'false' && steps.rebase.outputs.llm_touched == 'false' && steps.verify.outputs.passed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run release-fork.yml --repo "${{ github.repository }}" --ref master
@@ -252,12 +259,14 @@ jobs:
             git range-diff --no-color "$old_base..$master_before" "$new_base..HEAD"
             echo '```'
             echo
-            echo "To accept, replace \`master\` with the branch and build a release:"
+            echo "To accept, replace \`master\` with the branch:"
             echo
             echo '```sh'
             echo "git fetch origin"
             echo "git push --force-with-lease=master:$master_before origin origin/$branch:master"
-            echo "gh workflow run release-fork.yml --ref master"
+            if [ "${{ steps.base.outputs.new_kitty_release }}" = true ]; then
+              echo "gh workflow run release-fork.yml --ref master"
+            fi
             echo '```'
           } > /tmp/issue_body.md
 
