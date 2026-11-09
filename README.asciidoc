@@ -8,6 +8,8 @@ arbitrary screen text into real hyperlinks on hover (e.g. file references,
 custom link schemes). See link:docs/launch.rst[] for the hook and API
 documentation.
 
+Vote on this [pr](https://github.com/kovidgoyal/kitty/pull/10518) if you feel like this should be merged into upstream.
+
 Linux release builds are published at
 https://github.com/artemave/kitty/releases. Install (or update) with:
 
@@ -17,3 +19,13 @@ curl -fsSL https://raw.githubusercontent.com/artemave/kitty/master/install-fork.
 ----
 
 This symlinks `kitty` and `kitten` into `~/.local/bin`.
+
+To use a build of your own checkout instead, build it in place and point the
+same symlinks at it from the checkout root:
+
+[source,sh]
+----
+./setup.sh build
+ln -sfn "$PWD/kitty/launcher/kitty"  ~/.local/bin/kitty
+ln -sfn "$PWD/kitty/launcher/kitten" ~/.local/bin/kitten
+----
