@@ -156,6 +156,7 @@ jobs:
 
     brew:
         name: macOS Brew
+        if: github.repository == 'kovidgoyal/kitty'
         runs-on: macos-latest
         steps:
           - name: Checkout source code
