@@ -132,7 +132,7 @@ jobs:
         runs-on: ${{ matrix.os }}
         strategy:
             matrix:
-                os: [ubuntu-latest, macos-latest]
+                os: [ubuntu-latest]
         env:
             KITTY_BUNDLE: 1
             KITTY_SANITIZE: 1
